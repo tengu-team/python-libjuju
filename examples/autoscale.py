@@ -43,8 +43,8 @@ import argparse
 import asyncio
 import datetime
 import logging
-import math
 import signal
+import sys
 import textwrap
 
 from concurrent.futures import CancelledError
@@ -296,10 +296,10 @@ class AutoScaler(ModelObserver):
         return self.model.applications.get(self.app_name)
 
     def max_units(self):
-        return float(self.config.get('max-units', math.inf))
+        return int(self.config.get('max-units', sys.maxsize))
 
     def min_units(self):
-        return float(self.config.get('min-units', 0))
+        return int(self.config.get('min-units', 0))
 
     async def on_change(self, delta, old, new, model):
         """React to changes in the model.
@@ -381,7 +381,7 @@ class AutoScaler(ModelObserver):
         if max_destroyable <= 0:
             return
 
-        num_units = min(int(num_units), max_destroyable)
+        num_units = min(num_units, max_destroyable)
 
         # func to sort by unit number so we can kill newest units first
         def cmp(name):
@@ -409,7 +409,7 @@ class AutoScaler(ModelObserver):
         if max_addable <= 0:
             return
 
-        num_units = min(int(num_units), max_addable)
+        num_units = min(num_units, max_addable)
 
         return await self.app.add_units(count=num_units)
 
