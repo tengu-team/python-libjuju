@@ -180,7 +180,7 @@ class ScalingPolicy:
             num_units = scaling_adjustment
 
         log.debug('Applying scaling policy: %s', self.name)
-        return await func(num_units)
+        return await func(int(num_units))
 
 
 class Alarm:
