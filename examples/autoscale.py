@@ -78,7 +78,10 @@ def setup_parser():
 
 
 async def cpu_metric(unit, **kw):
-    action = await unit.run('cat /proc/loadavg')
+    try:
+        action = await unit.run('cat /proc/loadavg')
+    except Exception:
+        return None
     loadavg = action.results.get('Stdout')
     five_min_load = loadavg.strip().split()[1]
     log.debug('5min load on %s is %s', unit.name, five_min_load)
@@ -88,6 +91,8 @@ async def cpu_metric(unit, **kw):
 async def check_alarm(units, metric_func, stat_func, threshold, comparator):
     metrics = await asyncio.gather(*[
         metric_func(unit) for unit in units])
+    # filter out None vals
+    metrics = [m for m in metrics if m]
     return compare(stat_func(metrics), threshold, comparator)
 
 
@@ -107,6 +112,8 @@ def compare(metric, threshold, comparator):
 
 
 def average(metrics):
+    if not metrics:
+        return 0
     return sum(metrics) / len(metrics)
 
 
@@ -244,6 +251,7 @@ class Alarm:
     async def check_alarm(self):
         if not (self.scaler.app and self.scaler.app.units):
             log.debug('Skipping alarm check: %s - no units present', self.name)
+            return
 
         log.debug('Checking alarm: %s', self.name)
 
@@ -285,6 +293,8 @@ class AutoScaler(ModelObserver):
         self.loop = model.loop
         self._alarms = []
         self._destroyed_units = []
+        self._scale_lock = asyncio.Lock()
+        self._change_lock = asyncio.Lock()
 
         for alarm, alarm_cfg in self.config.get('alarms', {}).items():
             self._alarms.append(Alarm(alarm, alarm_cfg, self))
@@ -304,25 +314,16 @@ class AutoScaler(ModelObserver):
     async def on_change(self, delta, old, new, model):
         """React to changes in the model.
 
+        """
         app = self.app
 
-        # App deployed?
-        if not app:
-            await self.deploy()
-
-        # Too many units?
-        if len(app.units) > self.max_units():
-            await self.destroy_units(
-                len(app.units) - self.max_units()
-            )
-
-        # Too few units?
-        if len(app.units) < self.min_units():
-            await self.add_units(
-                self.min_units() - len(app.units)
-            )
-        """
-        pass
+        with await self._change_lock:
+            # Too few units?
+            if len(app.units) < self.min_units():
+                log.debug('Too few units for %s', self.app_name)
+                await self.add_units(
+                    self.min_units() - len(app.units)
+                )
 
     def start(self):
         """Start the AutoScaler.
@@ -336,6 +337,11 @@ class AutoScaler(ModelObserver):
         log.debug('Starting auto-scaler for %s', self.app_name)
         for alarm in self._alarms:
             alarm.enable()
+
+        # run on_change handler once at startup in case we don't get any
+        # changes from the model for a while
+        self.loop.create_task(
+            self.on_change(None, None, None, self.model))
 
     async def deploy(self):
         """Deploy the application.
@@ -374,27 +380,28 @@ class AutoScaler(ModelObserver):
         :param num_units: Number of units to destroy
 
         """
-        if not self.app:
-            return
+        with await self._scale_lock:
+            if not self.app:
+                return
 
-        max_destroyable = len(self.app.units) - self.min_units()
-        if max_destroyable <= 0:
-            return
+            max_destroyable = len(self.app.units) - self.min_units()
+            if max_destroyable <= 0:
+                return
 
-        num_units = min(num_units, max_destroyable)
+            num_units = min(num_units, max_destroyable)
 
-        # func to sort by unit number so we can kill newest units first
-        def cmp(name):
-            return int(name.split('/')[-1])
+            # func to sort by unit number so we can kill newest units first
+            def cmp(name):
+                return int(name.split('/')[-1])
 
-        unit_names = [
-            u.name for u in self.app.units
-            if u.name not in self._destroyed_units
-        ]
-        unit_names = sorted(unit_names, key=cmp, reverse=True)
+            unit_names = [
+                u.name for u in self.app.units
+                if u.name not in self._destroyed_units
+            ]
+            unit_names = sorted(unit_names, key=cmp, reverse=True)
 
-        self._destroyed_units.extend(unit_names[:num_units])
-        return await self.model.destroy_units(*unit_names[:num_units])
+            self._destroyed_units.extend(unit_names[:num_units])
+            return await self.model.destroy_units(*unit_names[:num_units])
 
     async def add_units(self, num_units):
         """Add one or more units of the application.
@@ -402,16 +409,17 @@ class AutoScaler(ModelObserver):
         :param num_units: Number of units to add
 
         """
-        if not self.app:
-            return
+        with await self._scale_lock:
+            if not self.app:
+                return
 
-        max_addable = self.max_units() - len(self.app.units)
-        if max_addable <= 0:
-            return
+            max_addable = self.max_units() - len(self.app.units)
+            if max_addable <= 0:
+                return
 
-        num_units = min(num_units, max_addable)
+            num_units = min(num_units, max_addable)
 
-        return await self.app.add_units(count=num_units)
+            return await self.app.add_units(count=num_units)
 
 
 async def run(loop, args):
