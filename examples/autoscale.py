@@ -50,14 +50,18 @@ EOF
 # start the auto-scaler
 .tox/py35/bin/python3.5 examples/autoscale.py ~/wiki-scaler.yaml
 
-# apply load to wiki to force scale out
+# to demonstrate auto-healing, remove the lone wiki unit, and observe
+# that a new unit is added in its place
+juju remove-unit wiki/0
+
+# to demonstrate auto-scaling, apply load
 sudo apt install apache2-utils
 sudo apt update
 ab -k -c 1000 -n 5000 http://ip-of-loadbalancer-unit-from-juju-status/
 # note: trailing slash in the url is important ^
 
-# wiki units will be added to accomodate the increased load
-# when load diminishes, wiki units will be removed
+# wiki units will be scaled out to accomodate the increased load
+# when load diminishes, wiki units will be scaled in
 
 """
 
