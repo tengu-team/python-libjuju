@@ -1,41 +1,63 @@
 #!/usr/bin/env python3.5
 
 """
-Juju auto-scaler.
+Juju auto-scaler demo.
 
 
-Example config:
+How to run it:
 
-    ubuntu:
-        min-units: 1
-        max-units: 5
-        deploy:
-            charm: ubuntu
-            series: xenial
-            channel: stable
-        alarms:
-            add-capacity-alarm:
-                statistic: average
-                metric: cpu
-                comparator: >=
-                threshold: 80
-                period: 300
-                policies:
-                    add-capacity:
-                        scaling-adjustment: 30
-                        adjustment-type: percent
-                        warmup: 300
-            decrease-capacity-alarm:
-                statistic: average
-                metric: cpu
-                comparator: <=
-                threshold: 40
-                period: 300
-                policies:
-                    decrease-capacity:
-                        when: decrease-capacity-alarm
-                        scaling-adjustment: 1
-                        adjustment-type: units
+# prepare a new Juju model, bootstrapping if necessary
+juju bootstrap lxd demo
+juju add-model demo
+
+# deploy the scalable wiki bundle from the charmstore
+juju deploy wiki-scalable
+
+# clone and build libjuju
+git clone https://github.com/juju/python-libjuju.git
+cd python-libjuju
+make .tox
+
+# create a sample scaling config file
+cat > ~/wiki-scaler.yaml <<EOF
+wiki:
+  min-units: 1
+  max-units: 10
+  alarms:
+    high-load:
+      statistic: average
+      metric: cpu
+      comparator: '>='
+      threshold: .80
+      period: 300
+      policies:
+        add-capacity:
+          scaling-adjustment: 30
+          adjustment-type: percent
+          warmup: 360
+    low-load:
+      statistic: average
+      metric: cpu
+      comparator: '<='
+      threshold: .50
+      period: 300
+      policies:
+        decrease-capacity:
+          scaling-adjustment: -1
+          adjustment-type: units
+EOF
+
+# start the auto-scaler
+.tox/py35/bin/python3.5 examples/autoscale.py ~/wiki-scaler.yaml
+
+# apply load to wiki to force scale out
+sudo apt install apache2-utils
+sudo apt update
+ab -k -c 1000 -n 5000 http://ip-of-loadbalancer-unit-from-juju-status/
+# note: trailing slash in the url is important ^
+
+# wiki units will be added to accomodate the increased load
+# when load diminishes, wiki units will be removed
 
 """
 
