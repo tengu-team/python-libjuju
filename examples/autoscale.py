@@ -16,6 +16,7 @@ juju deploy wiki-scalable
 # clone and build libjuju
 git clone https://github.com/juju/python-libjuju.git
 cd python-libjuju
+git checkout autoscaler
 make .tox
 
 # create a sample scaling config file
